@@ -68,12 +68,11 @@ def analyze_jd(jd_text: str, feedback: str = "") -> Dict:
         for attempt in range(4):
             try:
                 response = _client_genai.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0,
                         max_output_tokens=800,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
                 break
