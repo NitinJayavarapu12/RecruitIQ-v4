@@ -18,12 +18,21 @@ from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
-from services.bge_ranker import bi_encode_rank, cross_encode_rerank
+from services.bge_ranker import bi_encode_rank, cross_encode_rerank, _get_bi_encoder, _get_cross_encoder
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
 
 app = FastAPI(title="RecruitIQ API", version="4.0.0")
+
+
+@app.on_event("startup")
+async def warmup_models():
+    """Pre-load BGE models so the first screening job doesn't pay the cold-start penalty."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _get_bi_encoder)
+    await loop.run_in_executor(None, _get_cross_encoder)
+    print("[STARTUP] BGE models warmed up.")
 
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
@@ -386,6 +395,21 @@ async def run_screening(
             jd_requirements=jd_requirements,
             on_progress=on_phase3_progress,
         )
+
+        # Drop candidates Gemini couldn't parse (scanned/corrupted PDFs)
+        valid = [r for r in results if r.get("name", "N/A").upper() != "N/A"]
+        if valid:
+            results = valid
+
+        # AND mode: only keep candidates who have none of the primary skills missing
+        if skill_match_mode == "AND" and jd_requirements.get("primary_skills"):
+            primary_lower = {s.lower() for s in jd_requirements["primary_skills"]}
+            and_filtered = [
+                r for r in results
+                if not (primary_lower & {s.lower() for s in r.get("missing_skills", [])})
+            ]
+            if and_filtered:
+                results = and_filtered
 
         job["phase"] = "Creating resume ZIP..."
         zip_path = create_filtered_zip(

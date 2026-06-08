@@ -380,7 +380,7 @@ def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
     return unique[:top_n]
 
 
-CONCURRENCY_LIMIT = 5
+CONCURRENCY_LIMIT = 10
 
 
 async def gemini_rerank(
