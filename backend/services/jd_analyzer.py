@@ -6,10 +6,9 @@ from typing import Dict
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from google import genai
-from google.genai import types
+from groq import Groq
 
-_client_genai = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 JD_ANALYSIS_PROMPT = """\
 You are an expert technical recruiter. Analyze the following Job Description and extract key requirements.
@@ -67,29 +66,27 @@ def analyze_jd(jd_text: str, feedback: str = "") -> Dict:
         last_err = None
         for attempt in range(4):
             try:
-                response = _client_genai.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0,
-                        max_output_tokens=800,
-                    ),
+                response = _client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=800,
+                    response_format={"type": "json_object"},
                 )
                 break
             except Exception as e:
                 last_err = e
                 err_str = str(e)
-                if "RESOURCE_EXHAUSTED" in err_str and "quota" in err_str.lower():
-                    raise  # daily quota — retrying won't help
-                if "503" in err_str or "429" in err_str:
+                if "429" in err_str or "503" in err_str or "rate_limit" in err_str.lower():
                     wait = 5 * (2 ** attempt)
-                    print(f"  [JD_ANALYZER] Gemini {e.__class__.__name__} (attempt {attempt+1}), retrying in {wait}s...")
+                    print(f"  [JD_ANALYZER] Groq rate limit (attempt {attempt+1}), retrying in {wait}s...")
                     time.sleep(wait)
                 else:
                     raise
         else:
             raise last_err
-        raw = response.text.strip()
+
+        raw = response.choices[0].message.content.strip()
 
         if raw.startswith("```"):
             lines = raw.split("\n")

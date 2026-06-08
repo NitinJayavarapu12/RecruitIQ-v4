@@ -4,19 +4,14 @@ import hashlib
 import asyncio
 import os
 import time
-import warnings
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from google import genai
-from google.genai import types
+from groq import Groq
 
-warnings.filterwarnings("ignore")
-
-# ── Gemini client ─────────────────────────────────────────────────────────────
-_client_genai = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # ── In-memory parse cache (persists for server lifetime) ──────────────────────
 _parse_cache: Dict[str, str] = {}
@@ -38,7 +33,6 @@ def parse_resume_text(file_path: str) -> Optional[str]:
 
     text = ""
 
-    # Try PyMuPDF first (better layout handling)
     try:
         import fitz
         doc = fitz.open(file_path)
@@ -48,7 +42,6 @@ def parse_resume_text(file_path: str) -> Optional[str]:
     except Exception:
         pass
 
-    # Fall back to pdfplumber
     if not text.strip():
         try:
             import pdfplumber
@@ -71,37 +64,9 @@ def parse_resume_text(file_path: str) -> Optional[str]:
     return None
 
 
-# ── Stop words ────────────────────────────────────────────────────────────────
+# ── Scoring prompt ────────────────────────────────────────────────────────────
 
-STOP = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "is", "are", "was", "be", "have", "has", "do",
-    "will", "can", "this", "that", "we", "you", "they", "it", "as", "if",
-    "not", "more", "also", "work", "experience", "required", "preferred",
-    "strong", "knowledge", "use", "using", "ability", "skills", "good",
-    "must", "any", "all", "both", "into", "through", "than", "then",
-    "our", "your", "their", "should", "would", "could", "may", "might",
-    "team", "skill", "develop", "other", "members", "organization",
-    "description", "methodologies", "time", "company", "project", "process",
-    "system", "manage", "support", "provide", "ensure", "include", "various",
-    "different", "new", "well", "high", "key", "large", "within", "between",
-    "following", "related", "based", "used", "per", "etc", "responsible",
-    "working", "including", "multiple", "communication", "analytical",
-    "management", "software", "years", "client", "developer", "pvt", "ltd",
-    "india", "across", "enhance", "facilitate", "module", "quality", "cost",
-    "lead", "deep", "benefits", "fast", "growing", "teams", "manager",
-    "administration", "eclipse", "programming", "sql", "linux", "windows",
-    "manufacturing", "tools", "tool", "job", "like", "while", "about",
-    "stakeholders", "education", "collaborating", "skilled", "executed",
-    "problem-solving", "lifecycle", "technologies", "deployment", "language",
-    "model", "expertise", "shell", "core", "architecture", "medical",
-    "migration", "access", "apply", "database", "oracle", "workflow",
-}
-
-
-# ── Comprehensive Gemini prompt ───────────────────────────────────────────────
-
-COMPREHENSIVE_PROMPT = """\
+SCORING_PROMPT = """\
 You are an expert technical recruiter evaluating a candidate resume against a job description.
 
 JD REQUIREMENTS:
@@ -163,11 +128,11 @@ Return ONLY the JSON object. No explanation, no markdown, no extra text.
 """
 
 
-def extract_and_score_with_gemini(text: str, jd_requirements: dict) -> dict:
+def extract_and_score(text: str, jd_requirements: dict) -> dict:
     primary_str = ", ".join(jd_requirements.get("primary_skills", []))
     secondary_str = ", ".join(jd_requirements.get("secondary_skills", []))
 
-    prompt = COMPREHENSIVE_PROMPT.format(
+    prompt = SCORING_PROMPT.format(
         required_title=jd_requirements.get("required_title", "N/A"),
         required_years=jd_requirements.get("required_years", "0"),
         required_education=jd_requirements.get("required_education", "N/A"),
@@ -195,29 +160,27 @@ def extract_and_score_with_gemini(text: str, jd_requirements: dict) -> dict:
         last_err = None
         for attempt in range(4):
             try:
-                response = _client_genai.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0,
-                        max_output_tokens=1200,
-                    ),
+                response = _client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=1200,
+                    response_format={"type": "json_object"},
                 )
                 break
             except Exception as e:
                 last_err = e
                 err_str = str(e)
-                if "RESOURCE_EXHAUSTED" in err_str and "quota" in err_str.lower():
-                    raise  # daily quota — retrying won't help
-                if "503" in err_str or "429" in err_str:
+                if "429" in err_str or "503" in err_str or "rate_limit" in err_str.lower():
                     wait = 5 * (2 ** attempt)
-                    print(f"  [GEMINI] {e.__class__.__name__} (attempt {attempt+1}), retrying in {wait}s...")
+                    print(f"  [GROQ] Rate limit (attempt {attempt+1}), retrying in {wait}s...")
                     time.sleep(wait)
                 else:
                     raise
         else:
             raise last_err
-        raw = response.text.strip()
+
+        raw = response.choices[0].message.content.strip()
 
         if raw.startswith("```"):
             lines = raw.split("\n")
@@ -266,7 +229,7 @@ def extract_and_score_with_gemini(text: str, jd_requirements: dict) -> dict:
         }
 
     except Exception as e:
-        print(f"  [GEMINI] Extraction failed: {e}")
+        print(f"  [GROQ] Scoring failed: {e}")
         return defaults
 
 
@@ -317,7 +280,7 @@ def process_single_resume(resume: Dict, jd_text: str, jd_requirements: dict) -> 
     parsed_text = parse_resume_text(file_path)
     text = parsed_text if parsed_text else fallback_text
 
-    fields = extract_and_score_with_gemini(text, jd_requirements)
+    fields = extract_and_score(text, jd_requirements)
     final_score = round(compute_final_score(fields), 1)
     tier = get_tier(final_score)
     experience_flag = get_experience_flag(
@@ -325,7 +288,7 @@ def process_single_resume(resume: Dict, jd_text: str, jd_requirements: dict) -> 
         jd_requirements.get("required_years", "0")
     )
 
-    print(f"  [GEMINI] {fields['name']} | score={final_score} | tier={tier}")
+    print(f"  [GROQ] {fields['name']} | score={final_score} | tier={tier}")
 
     return {
         "filename":                filename,
@@ -382,7 +345,7 @@ def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
     return unique[:top_n]
 
 
-CONCURRENCY_LIMIT = 10
+CONCURRENCY_LIMIT = 5
 
 
 async def gemini_rerank(
@@ -400,7 +363,7 @@ async def gemini_rerank(
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     done_count = 0
 
-    print(f"[GEMINI] Processing {total} resumes (concurrency={CONCURRENCY_LIMIT})...")
+    print(f"[GROQ] Processing {total} resumes (concurrency={CONCURRENCY_LIMIT})...")
 
     async def process_with_semaphore(resume: Dict):
         nonlocal done_count
