@@ -4,7 +4,7 @@ import os
 import re
 import tempfile
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List
 
 from dotenv import load_dotenv
@@ -318,35 +318,37 @@ async def run_screening(
             job["error"] = "No resumes found."
             return
 
-        # Phase 1 — parallel PDF parsing
+        # Phase 1 — async PDF parsing, 4 concurrent, 20s per-file timeout
         job["phase"] = "Phase 1: Reading resumes..."
         parsed = []
         completed = 0
+        loop = asyncio.get_running_loop()
+        # 8 workers so abandoned threads (stuck on bad PDFs) don't starve healthy ones
+        parse_executor = ThreadPoolExecutor(max_workers=8)
+        sem = asyncio.Semaphore(4)
 
-        def parse_only(file_path: str, filename: str):
-            return parse_single_resume(file_path, filename)
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_file = {
-                executor.submit(
-                    parse_only,
-                    os.path.join(resume_folder, fn),
-                    fn
-                ): fn
-                for fn in pdf_files
-            }
-            for future in as_completed(future_to_file):
-                completed += 1
-                fn = future_to_file[future]
-                job["progress"] = completed
-                job["current_file"] = fn
+        async def parse_one(fn: str):
+            nonlocal completed
+            file_path = os.path.join(resume_folder, fn)
+            result = None
+            async with sem:
                 try:
-                    resume = future.result(timeout=20)
-                    if resume:
-                        parsed.append(resume)
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            parse_executor, parse_single_resume, file_path, fn
+                        ),
+                        timeout=20.0,
+                    )
                 except Exception:
-                    pass
-                await asyncio.sleep(0)
+                    print(f"[SKIP] {fn} (timeout or parse error)")
+            completed += 1
+            job["progress"] = completed
+            job["current_file"] = fn
+            if result:
+                parsed.append(result)
+
+        await asyncio.gather(*[parse_one(fn) for fn in pdf_files])
+        parse_executor.shutdown(wait=False)
 
         if not parsed:
             job["status"] = "complete"
