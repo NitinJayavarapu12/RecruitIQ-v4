@@ -18,7 +18,7 @@ from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
-from services.keyword_matcher import keyword_match, extract_keywords
+from services.bge_ranker import bi_encode_rank, cross_encode_rerank
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
@@ -304,24 +304,18 @@ async def run_screening(
             job["error"] = "No resumes found."
             return
 
-        # Phase 1 — parallel keyword matching
-        job["phase"] = "Phase 1: Reading and scoring resumes..."
-        scored = []
+        # Phase 1 — parallel PDF parsing
+        job["phase"] = "Phase 1: Reading resumes..."
+        parsed = []
         completed = 0
 
-        # Extract JD keywords once — not once per resume
-        jd_keywords = extract_keywords(jd_text)
-
-        def parse_and_score(file_path: str, filename: str):
-            resume = parse_single_resume(file_path, filename)
-            if resume:
-                resume["keyword_score"] = keyword_match(jd_keywords, resume["text"])
-            return resume
+        def parse_only(file_path: str, filename: str):
+            return parse_single_resume(file_path, filename)
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             future_to_file = {
                 executor.submit(
-                    parse_and_score,
+                    parse_only,
                     os.path.join(resume_folder, fn),
                     fn
                 ): fn
@@ -335,38 +329,62 @@ async def run_screening(
                 try:
                     resume = future.result()
                     if resume:
-                        scored.append(resume)
+                        parsed.append(resume)
                 except Exception:
                     pass
                 await asyncio.sleep(0)
 
-        scored.sort(key=lambda x: x["keyword_score"], reverse=True)
-        scored = deduplicate_by_candidate(scored)
-        top_resumes = scored[:top_n + 10]
-
-        if not top_resumes:
+        if not parsed:
             job["status"] = "complete"
             job["phase"] = "Done — no resumes could be parsed."
             job["results"] = []
             return
 
-        # Phase 2 — Gemini scoring
-        phase2_total = len(top_resumes)
-        job["phase"] = f"Phase 2: AI scoring top {phase2_total} resumes..."
-        job["progress"] = 0
-        job["total"] = phase2_total
+        loop = asyncio.get_running_loop()
 
-        def on_phase2_progress(done: int, total: int, filename: str):
+        # Phase 1.5 — BGE bi-encoder semantic ranking
+        bi_top_k = min(150, len(parsed))
+        job["phase"] = f"Phase 1.5: Semantic ranking {len(parsed)} resumes..."
+        job["progress"] = 0
+        job["total"] = len(parsed)
+        bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
+        job["progress"] = len(parsed)
+        await asyncio.sleep(0)
+
+        # Phase 2 — BGE cross-encoder reranking
+        cross_top_k = max(top_n + 10, 20)
+        job["phase"] = f"Phase 2: Precision reranking top {len(bi_ranked)} candidates..."
+        job["progress"] = 0
+        job["total"] = len(bi_ranked)
+        cross_ranked = await loop.run_in_executor(None, cross_encode_rerank, jd_text, bi_ranked, cross_top_k)
+        cross_ranked = deduplicate_by_candidate(cross_ranked)
+        top_resumes = cross_ranked[:top_n + 10]
+        job["progress"] = len(bi_ranked)
+        await asyncio.sleep(0)
+
+        if not top_resumes:
+            job["status"] = "complete"
+            job["phase"] = "Done — no matching resumes found."
+            job["results"] = []
+            return
+
+        # Phase 3 — Gemini scoring (only the reranker's top candidates)
+        phase3_total = len(top_resumes)
+        job["phase"] = f"Phase 3: AI scoring top {phase3_total} resumes..."
+        job["progress"] = 0
+        job["total"] = phase3_total
+
+        def on_phase3_progress(done: int, total: int, filename: str):
             job["progress"] = done
             job["current_file"] = filename
-            job["phase"] = f"Phase 2: AI scoring ({done}/{total})"
+            job["phase"] = f"Phase 3: AI scoring ({done}/{total})"
 
         results = await gemini_rerank(
             jd_text,
             top_resumes,
             top_n=top_n,
             jd_requirements=jd_requirements,
-            on_progress=on_phase2_progress,
+            on_progress=on_phase3_progress,
         )
 
         job["phase"] = "Creating resume ZIP..."
