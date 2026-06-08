@@ -326,7 +326,7 @@ async def run_screening(
         def parse_only(file_path: str, filename: str):
             return parse_single_resume(file_path, filename)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_file = {
                 executor.submit(
                     parse_only,
