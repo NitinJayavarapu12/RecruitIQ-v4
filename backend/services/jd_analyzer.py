@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Dict
 
 from dotenv import load_dotenv
@@ -63,15 +64,29 @@ def analyze_jd(jd_text: str, feedback: str = "") -> Dict:
         prompt = JD_ANALYSIS_PROMPT.format(jd_text=jd_text[:6000])
 
     try:
-        response = _client_genai.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0,
-                max_output_tokens=800,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
+        last_err = None
+        for attempt in range(4):
+            try:
+                response = _client_genai.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0,
+                        max_output_tokens=800,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                break
+            except Exception as e:
+                last_err = e
+                if "503" in str(e) or "429" in str(e):
+                    wait = 5 * (2 ** attempt)
+                    print(f"  [JD_ANALYZER] Gemini {e.__class__.__name__} (attempt {attempt+1}), retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
+        else:
+            raise last_err
         raw = response.text.strip()
 
         if raw.startswith("```"):
