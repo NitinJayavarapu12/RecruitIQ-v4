@@ -85,14 +85,25 @@ def parse_single_resume(file_path: str, filename: str) -> Optional[dict]:
         if ext in (".docx", ".doc"):
             text = _parse_docx(file_path)
         else:
-            # PDF: try fast text extraction first
-            with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text + "\n"
+            # Try PyMuPDF first — faster and handles more PDF types
+            try:
+                import fitz
+                doc = fitz.open(file_path)
+                for page in doc:
+                    text += page.get_text() + "\n"
+                doc.close()
+            except Exception:
+                pass
 
-            # Fall back to OCR for image-based PDFs (only if available)
+            # Fall back to pdfplumber
+            if not text.strip():
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+
+            # Last resort: OCR (only if available)
             if not text.strip() and _OCR_AVAILABLE:
                 print(f"[OCR] Processing: {filename}")
                 images = convert_from_path(file_path, dpi=150, first_page=1, last_page=3)

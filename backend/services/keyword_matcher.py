@@ -1,6 +1,6 @@
 import re
-from typing import List
-from rapidfuzz import fuzz
+from typing import List, Set
+from rapidfuzz import fuzz, process
 
 STOP_WORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -20,40 +20,33 @@ STOP_WORDS = {
 
 
 def extract_keywords(text: str) -> List[str]:
-    """Extract meaningful keywords from text, filtering stop words."""
     text = text.lower()
-    # Match words including tech-specific patterns like C++, .NET, Node.js
     words = re.findall(r'\b[a-z][a-z0-9+#./\-]*\b', text)
-    keywords = [w for w in words if w not in STOP_WORDS and len(w) > 2]
-    return list(set(keywords))
+    return list({w for w in words if w not in STOP_WORDS and len(w) > 2})
 
 
-def keyword_match(jd_text: str, resume_text: str) -> float:
+def keyword_match(jd_keywords: List[str], resume_text: str) -> float:
     """
-    Score a resume against a JD using keyword overlap + fuzzy matching.
-    Returns a score from 0 to 100.
+    Score a resume against pre-extracted JD keywords.
+    Accepts a pre-computed keyword list so extraction isn't repeated per resume.
     """
-    jd_keywords = extract_keywords(jd_text)
-    resume_lower = resume_text.lower()
-    resume_words = set(re.findall(r'\b[a-z][a-z0-9+#./\-]*\b', resume_lower))
-
     if not jd_keywords:
         return 0.0
+
+    resume_lower = resume_text.lower()
+    resume_words = list({w for w in re.findall(r'\b[a-z][a-z0-9+#./\-]*\b', resume_lower)})
 
     matched = 0.0
     for keyword in jd_keywords:
         if keyword in resume_lower:
-            # Direct match — full credit
             matched += 1.0
         else:
-            # Fuzzy match for slight variations (e.g., "python" vs "pythonic")
-            best_ratio = max(
-                (fuzz.ratio(keyword, w) for w in resume_words if abs(len(w) - len(keyword)) <= 3),
-                default=0,
-            )
-            if best_ratio >= 88:
-                matched += 0.7
+            # Filter candidates by length then use rapidfuzz C-level scorer
+            candidates = [w for w in resume_words if abs(len(w) - len(keyword)) <= 3]
+            if candidates:
+                result = process.extractOne(keyword, candidates, scorer=fuzz.ratio, score_cutoff=88)
+                if result:
+                    matched += 0.7
 
     score = (matched / len(jd_keywords)) * 100
-    print(f"[SCORE] {score:.1f}% match")
     return min(round(score, 1), 100.0)

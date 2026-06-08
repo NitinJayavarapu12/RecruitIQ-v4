@@ -18,7 +18,7 @@ from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
-from services.keyword_matcher import keyword_match
+from services.keyword_matcher import keyword_match, extract_keywords
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
@@ -309,13 +309,16 @@ async def run_screening(
         scored = []
         completed = 0
 
+        # Extract JD keywords once — not once per resume
+        jd_keywords = extract_keywords(jd_text)
+
         def parse_and_score(file_path: str, filename: str):
             resume = parse_single_resume(file_path, filename)
             if resume:
-                resume["keyword_score"] = keyword_match(jd_text, resume["text"])
+                resume["keyword_score"] = keyword_match(jd_keywords, resume["text"])
             return resume
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             future_to_file = {
                 executor.submit(
                     parse_and_score,
