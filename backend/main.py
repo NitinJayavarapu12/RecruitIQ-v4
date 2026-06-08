@@ -18,7 +18,7 @@ from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
-from services.bge_ranker import bi_encode_rank, cross_encode_rerank, _get_bi_encoder, _get_cross_encoder
+from services.bge_ranker import bi_encode_rank, _get_model as _get_bge_model
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
@@ -34,9 +34,8 @@ async def warmup_models():
 async def _run_warmup():
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, _get_bi_encoder)
-        await loop.run_in_executor(None, _get_cross_encoder)
-        print("[STARTUP] BGE models warmed up.")
+        await loop.run_in_executor(None, _get_bge_model)
+        print("[STARTUP] BGE model warmed up.")
     except Exception as e:
         print(f"[STARTUP] BGE warmup error (non-fatal): {e}")
 
@@ -363,18 +362,9 @@ async def run_screening(
         job["progress"] = 0
         job["total"] = len(parsed)
         bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
+        bi_ranked = deduplicate_by_candidate(bi_ranked)
+        top_resumes = bi_ranked[:top_n + 10]
         job["progress"] = len(parsed)
-        await asyncio.sleep(0)
-
-        # Phase 2 — BGE cross-encoder reranking
-        cross_top_k = max(top_n + 10, 20)
-        job["phase"] = f"Phase 2: Precision reranking top {len(bi_ranked)} candidates..."
-        job["progress"] = 0
-        job["total"] = len(bi_ranked)
-        cross_ranked = await loop.run_in_executor(None, cross_encode_rerank, jd_text, bi_ranked, cross_top_k)
-        cross_ranked = deduplicate_by_candidate(cross_ranked)
-        top_resumes = cross_ranked[:top_n + 10]
-        job["progress"] = len(bi_ranked)
         await asyncio.sleep(0)
 
         if not top_resumes:
@@ -383,16 +373,16 @@ async def run_screening(
             job["results"] = []
             return
 
-        # Phase 3 — Gemini scoring (only the reranker's top candidates)
-        phase3_total = len(top_resumes)
-        job["phase"] = f"Phase 3: AI scoring top {phase3_total} resumes..."
+        # Phase 2 — AI scoring of top candidates
+        phase2_total = len(top_resumes)
+        job["phase"] = f"Phase 2: AI scoring top {phase2_total} resumes..."
         job["progress"] = 0
-        job["total"] = phase3_total
+        job["total"] = phase2_total
 
         def on_phase3_progress(done: int, total: int, filename: str):
             job["progress"] = done
             job["current_file"] = filename
-            job["phase"] = f"Phase 3: AI scoring ({done}/{total})"
+            job["phase"] = f"Phase 2: AI scoring ({done}/{total})"
 
         results = await gemini_rerank(
             jd_text,
