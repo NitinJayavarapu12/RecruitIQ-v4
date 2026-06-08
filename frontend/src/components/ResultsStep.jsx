@@ -1,4 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+
+const PAGE_SIZE = 10;
 import { downloadExcel, downloadZip } from "../api/screenerAPI";
 
 const TIER_COLORS = {
@@ -140,6 +142,10 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
   const [skillFilter, setSkillFilter] = useState([]);
+  const [page, setPage] = useState(1);
+
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [search, tierFilter, skillFilter]);
 
   const requiredSkills = skillsData?.primarySkills || jdData?.primary_skills || [];
 
@@ -166,6 +172,9 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
     strong: results.filter(c => c.tier === "✅ Strong Match").length,
     avgScore: results.length ? Math.round(results.reduce((s, c) => s + (c.final_score || c.score || 0), 0) / results.length) : 0,
   }), [results]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const toggleSkillFilter = (skill) => {
     setSkillFilter(prev =>
@@ -277,9 +286,10 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c, idx) => {
+              {paginated.map((c, idx) => {
                 const score = c.final_score || c.score || 0;
                 const isSelected = selected?.filename === c.filename;
+                const globalRank = (page - 1) * PAGE_SIZE + idx + 1;
                 return (
                   <tr
                     key={c.filename || idx}
@@ -288,7 +298,7 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
                       isSelected ? "bg-indigo-50" : "hover:bg-gray-50"
                     }`}
                   >
-                    <td className="px-4 py-3 text-sm text-gray-400 font-medium">{idx + 1}</td>
+                    <td className="px-4 py-3 text-sm text-gray-400 font-medium">{globalRank}</td>
                     <td className="px-4 py-3">
                       <div className="text-sm font-medium text-gray-900">{c.name || "N/A"}</div>
                       <div className="text-xs text-gray-400">{c.email && c.email !== "N/A" ? c.email : ""}</div>
@@ -332,6 +342,55 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <span className="text-xs text-gray-400">
+              {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} candidates
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                ← Prev
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                .reduce((acc, p, i, arr) => {
+                  if (i > 0 && p - arr[i - 1] > 1) acc.push("...");
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, i) =>
+                  p === "..." ? (
+                    <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-gray-400">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => setPage(p)}
+                      className={`w-7 h-7 text-xs rounded-lg border transition-colors ${
+                        p === page
+                          ? "bg-indigo-600 text-white border-indigo-600"
+                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Detail panel */}

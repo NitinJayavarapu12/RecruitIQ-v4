@@ -85,20 +85,22 @@ def parse_single_resume(file_path: str, filename: str) -> Optional[dict]:
         if ext in (".docx", ".doc"):
             text = _parse_docx(file_path)
         else:
-            # Try PyMuPDF first — faster and handles more PDF types
+            # Try PyMuPDF first — faster and handles more PDF types (cap at 3 pages)
             try:
                 import fitz
                 doc = fitz.open(file_path)
-                for page in doc:
+                for i, page in enumerate(doc):
+                    if i >= 3:
+                        break
                     text += page.get_text() + "\n"
                 doc.close()
             except Exception:
                 pass
 
-            # Fall back to pdfplumber
+            # Fall back to pdfplumber (cap at 3 pages)
             if not text.strip():
                 with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages:
+                    for page in pdf.pages[:3]:
                         page_text = page.extract_text()
                         if page_text:
                             text += page_text + "\n"

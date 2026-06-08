@@ -36,7 +36,9 @@ def parse_resume_text(file_path: str) -> Optional[str]:
     try:
         import fitz
         doc = fitz.open(file_path)
-        for page in doc:
+        for i, page in enumerate(doc):
+            if i >= 3:
+                break
             text += page.get_text() + "\n"
         doc.close()
     except Exception:
@@ -46,7 +48,7 @@ def parse_resume_text(file_path: str) -> Optional[str]:
         try:
             import pdfplumber
             with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
+                for page in pdf.pages[:3]:
                     page_text = page.extract_text()
                     if page_text:
                         text += page_text + "\n"
