@@ -326,7 +326,7 @@ async def run_screening(
         def parse_only(file_path: str, filename: str):
             return parse_single_resume(file_path, filename)
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             future_to_file = {
                 executor.submit(
                     parse_only,
@@ -341,7 +341,7 @@ async def run_screening(
                 job["progress"] = completed
                 job["current_file"] = fn
                 try:
-                    resume = future.result()
+                    resume = future.result(timeout=20)
                     if resume:
                         parsed.append(resume)
                 except Exception:

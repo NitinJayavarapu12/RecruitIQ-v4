@@ -85,34 +85,28 @@ def parse_single_resume(file_path: str, filename: str) -> Optional[dict]:
         if ext in (".docx", ".doc"):
             text = _parse_docx(file_path)
         else:
-            # Try PyMuPDF first — faster and handles more PDF types (cap at 3 pages)
+            # PyMuPDF — fast ONNX-friendly parser, cap at 2 pages for ranking speed
             try:
                 import fitz
                 doc = fitz.open(file_path)
                 for i, page in enumerate(doc):
-                    if i >= 3:
+                    if i >= 2:
                         break
                     text += page.get_text() + "\n"
                 doc.close()
             except Exception:
                 pass
 
-            # Fall back to pdfplumber (cap at 3 pages)
+            # pdfplumber fallback only for PDFs PyMuPDF couldn't read at all
             if not text.strip():
-                with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages[:3]:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n"
-
-            # Last resort: OCR (only if available)
-            if not text.strip() and _OCR_AVAILABLE:
-                print(f"[OCR] Processing: {filename}")
-                images = convert_from_path(file_path, dpi=150, first_page=1, last_page=3)
-                for image in images:
-                    page_text = pytesseract.image_to_string(image, config='--psm 6')
-                    if page_text:
-                        text += page_text + "\n"
+                try:
+                    with pdfplumber.open(file_path) as pdf:
+                        for page in pdf.pages[:2]:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n"
+                except Exception:
+                    pass
 
         if text.strip():
             _save_cache(cache_path, file_hash, text.strip())
