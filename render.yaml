@@ -1,28 +1,26 @@
 services:
   # ── Backend (FastAPI) ──────────────────────────────────────────────────────
   - type: web
-    name: recruitiq-backend
+    name: recruitiq-v4-backend
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false          # set manually in Render dashboard
-      - key: LLAMA_CLOUD_API_KEY
+      - key: GEMINI_API_KEY
         sync: false          # set manually in Render dashboard
       - key: ALLOWED_ORIGINS
-        sync: false          # set to your frontend URL after deploy e.g. https://recruitiq.onrender.com
+        sync: false          # set to your frontend URL e.g. https://recruitiq-v4.onrender.com
 
   # ── Frontend (React/Vite static site) ─────────────────────────────────────
   - type: static
-    name: recruitiq-frontend
+    name: recruitiq-v4-frontend
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        sync: false          # set to your backend URL e.g. https://recruitiq-backend.onrender.com
+        sync: false          # set to your backend URL e.g. https://recruitiq-v4-backend.onrender.com
     routes:
       - type: rewrite
         source: /*
