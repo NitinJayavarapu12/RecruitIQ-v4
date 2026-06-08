@@ -79,7 +79,10 @@ def analyze_jd(jd_text: str, feedback: str = "") -> Dict:
                 break
             except Exception as e:
                 last_err = e
-                if "503" in str(e) or "429" in str(e):
+                err_str = str(e)
+                if "RESOURCE_EXHAUSTED" in err_str and "quota" in err_str.lower():
+                    raise  # daily quota — retrying won't help
+                if "503" in err_str or "429" in err_str:
                     wait = 5 * (2 ** attempt)
                     print(f"  [JD_ANALYZER] Gemini {e.__class__.__name__} (attempt {attempt+1}), retrying in {wait}s...")
                     time.sleep(wait)

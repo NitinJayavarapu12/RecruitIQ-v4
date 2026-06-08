@@ -28,11 +28,17 @@ app = FastAPI(title="RecruitIQ API", version="4.0.0")
 
 @app.on_event("startup")
 async def warmup_models():
-    """Pre-load BGE models so the first screening job doesn't pay the cold-start penalty."""
+    """Schedule BGE model loading in background — server binds port immediately."""
+    asyncio.create_task(_run_warmup())
+
+async def _run_warmup():
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _get_bi_encoder)
-    await loop.run_in_executor(None, _get_cross_encoder)
-    print("[STARTUP] BGE models warmed up.")
+    try:
+        await loop.run_in_executor(None, _get_bi_encoder)
+        await loop.run_in_executor(None, _get_cross_encoder)
+        print("[STARTUP] BGE models warmed up.")
+    except Exception as e:
+        print(f"[STARTUP] BGE warmup error (non-fatal): {e}")
 
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"

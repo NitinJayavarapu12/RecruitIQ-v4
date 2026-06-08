@@ -196,18 +196,20 @@ def extract_and_score_with_gemini(text: str, jd_requirements: dict) -> dict:
         for attempt in range(4):
             try:
                 response = _client_genai.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0,
                         max_output_tokens=1200,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
                 break
             except Exception as e:
                 last_err = e
-                if "503" in str(e) or "429" in str(e):
+                err_str = str(e)
+                if "RESOURCE_EXHAUSTED" in err_str and "quota" in err_str.lower():
+                    raise  # daily quota — retrying won't help
+                if "503" in err_str or "429" in err_str:
                     wait = 5 * (2 ** attempt)
                     print(f"  [GEMINI] {e.__class__.__name__} (attempt {attempt+1}), retrying in {wait}s...")
                     time.sleep(wait)
