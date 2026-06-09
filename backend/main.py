@@ -123,8 +123,8 @@ async def screen_resumes(
     secondary_skills: str = Form(default="[]"),
     jd_text_override: str = Form(default=""),
     skill_match_mode: str = Form(default="OR"),
-    required_skills: str = Form(default="[]"),
-    required_threshold: int = Form(default=2),
+    filter_skills: str = Form(default="[]"),
+    filter_mode: str = Form(default="OR"),
 ):
     if len(resume_files) > 400:
         raise HTTPException(status_code=400, detail="Maximum 400 resume files allowed.")
@@ -166,9 +166,9 @@ async def screen_resumes(
     try:
         approved_primary = json.loads(primary_skills) if primary_skills else []
         approved_secondary = json.loads(secondary_skills) if secondary_skills else []
-        required_skills_list = json.loads(required_skills) if required_skills else []
+        filter_skills_list = json.loads(filter_skills) if filter_skills else []
     except json.JSONDecodeError:
-        approved_primary, approved_secondary, required_skills_list = [], [], []
+        approved_primary, approved_secondary, filter_skills_list = [], [], []
 
     background_tasks.add_task(
         run_screening,
@@ -180,8 +180,8 @@ async def screen_resumes(
         approved_primary=approved_primary,
         approved_secondary=approved_secondary,
         skill_match_mode=skill_match_mode,
-        required_skills=required_skills_list,
-        required_threshold=required_threshold,
+        filter_skills=filter_skills_list,
+        filter_mode=filter_mode,
     )
 
     return {"job_id": job_id}
@@ -285,8 +285,8 @@ async def run_screening(
     approved_primary: List[str] = None,
     approved_secondary: List[str] = None,
     skill_match_mode: str = "OR",
-    required_skills: List[str] = None,
-    required_threshold: int = 2,
+    filter_skills: List[str] = None,
+    filter_mode: str = "OR",
 ):
     try:
         job = jobs[job_id]
@@ -394,19 +394,16 @@ async def run_screening(
         if valid:
             results = valid
 
-        # Required skills threshold filter
-        if required_skills:
-            req_lower = {s.lower() for s in required_skills}
-            threshold = max(1, required_threshold)
-            threshold_filtered = [
-                r for r in results
-                if sum(
-                    1 for s in r.get("matched_skills", [])
-                    if s.lower() in req_lower
-                ) >= threshold
-            ]
-            if threshold_filtered:
-                results = threshold_filtered
+        # Skill filter — AND: must have all selected, OR: must have at least one
+        if filter_skills:
+            filt_lower = {s.lower() for s in filter_skills}
+            matched_lower = lambda r: {s.lower() for s in r.get("matched_skills", [])}
+            if filter_mode == "AND":
+                skill_filtered = [r for r in results if filt_lower <= matched_lower(r)]
+            else:
+                skill_filtered = [r for r in results if filt_lower & matched_lower(r)]
+            if skill_filtered:
+                results = skill_filtered
 
         job["phase"] = "Creating resume ZIP..."
         zip_path = create_filtered_zip(
