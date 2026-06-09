@@ -123,6 +123,8 @@ async def screen_resumes(
     secondary_skills: str = Form(default="[]"),
     jd_text_override: str = Form(default=""),
     skill_match_mode: str = Form(default="OR"),
+    required_skills: str = Form(default="[]"),
+    required_threshold: int = Form(default=2),
 ):
     if len(resume_files) > 400:
         raise HTTPException(status_code=400, detail="Maximum 400 resume files allowed.")
@@ -164,8 +166,9 @@ async def screen_resumes(
     try:
         approved_primary = json.loads(primary_skills) if primary_skills else []
         approved_secondary = json.loads(secondary_skills) if secondary_skills else []
+        required_skills_list = json.loads(required_skills) if required_skills else []
     except json.JSONDecodeError:
-        approved_primary, approved_secondary = [], []
+        approved_primary, approved_secondary, required_skills_list = [], [], []
 
     background_tasks.add_task(
         run_screening,
@@ -177,6 +180,8 @@ async def screen_resumes(
         approved_primary=approved_primary,
         approved_secondary=approved_secondary,
         skill_match_mode=skill_match_mode,
+        required_skills=required_skills_list,
+        required_threshold=required_threshold,
     )
 
     return {"job_id": job_id}
@@ -280,6 +285,8 @@ async def run_screening(
     approved_primary: List[str] = None,
     approved_secondary: List[str] = None,
     skill_match_mode: str = "OR",
+    required_skills: List[str] = None,
+    required_threshold: int = 2,
 ):
     try:
         job = jobs[job_id]
@@ -353,7 +360,7 @@ async def run_screening(
         job["total"] = len(parsed)
         bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
         bi_ranked = deduplicate_by_candidate(bi_ranked)
-        top_resumes = bi_ranked[:top_n + 10]
+        top_resumes = bi_ranked[:max(top_n * 3, 30)]
         job["progress"] = len(parsed)
         await asyncio.sleep(0)
 
@@ -382,20 +389,24 @@ async def run_screening(
             on_progress=on_phase3_progress,
         )
 
-        # Drop candidates Gemini couldn't parse (scanned/corrupted PDFs)
+        # Drop candidates Groq couldn't parse (scanned/corrupted PDFs)
         valid = [r for r in results if r.get("name", "N/A").upper() != "N/A"]
         if valid:
             results = valid
 
-        # AND mode: only keep candidates who have none of the primary skills missing
-        if skill_match_mode == "AND" and jd_requirements.get("primary_skills"):
-            primary_lower = {s.lower() for s in jd_requirements["primary_skills"]}
-            and_filtered = [
+        # Required skills threshold filter
+        if required_skills:
+            req_lower = {s.lower() for s in required_skills}
+            threshold = max(1, required_threshold)
+            threshold_filtered = [
                 r for r in results
-                if not (primary_lower & {s.lower() for s in r.get("missing_skills", [])})
+                if sum(
+                    1 for s in r.get("matched_skills", [])
+                    if s.lower() in req_lower
+                ) >= threshold
             ]
-            if and_filtered:
-                results = and_filtered
+            if threshold_filtered:
+                results = threshold_filtered
 
         job["phase"] = "Creating resume ZIP..."
         zip_path = create_filtered_zip(

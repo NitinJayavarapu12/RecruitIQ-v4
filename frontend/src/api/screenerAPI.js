@@ -38,7 +38,8 @@ export async function refineSkills(jdText, feedback) {
 }
 
 export async function startScreening({
-  jdFile, resumeFiles, topN, primarySkills, secondarySkills, jdTextOverride, skillMatchMode
+  jdFile, resumeFiles, topN, primarySkills, secondarySkills, jdTextOverride,
+  requiredSkills, requiredThreshold,
 }) {
   const form = new FormData();
   if (jdFile) form.append("jd_file", jdFile);
@@ -47,7 +48,8 @@ export async function startScreening({
   form.append("primary_skills", JSON.stringify(primarySkills || []));
   form.append("secondary_skills", JSON.stringify(secondarySkills || []));
   form.append("jd_text_override", jdTextOverride || "");
-  form.append("skill_match_mode", skillMatchMode || "OR");
+  form.append("required_skills", JSON.stringify(requiredSkills || []));
+  form.append("required_threshold", requiredThreshold ?? 2);
   const res = await axios.post(`${BASE}/screen`, form);
   return res.data;
 }

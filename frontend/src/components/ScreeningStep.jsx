@@ -27,7 +27,8 @@ export default function ScreeningStep({ jdData, skillsData, resumeFiles, topN, o
         primarySkills: skillsData?.primarySkills || [],
         secondarySkills: skillsData?.secondarySkills || [],
         jdTextOverride: jdData?.jd_text || "",
-        skillMatchMode: skillsData?.matchMode || "OR",
+        requiredSkills: skillsData?.requiredSkills || [],
+        requiredThreshold: skillsData?.threshold ?? 2,
       });
 
       setStatus("running");

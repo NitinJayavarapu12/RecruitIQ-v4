@@ -67,7 +67,7 @@ export default function Sidebar({ onNewScreening, currentStep }) {
 
       {/* Footer */}
       <div className="px-6 py-4 border-t border-gray-700">
-        <div className="text-gray-500 text-xs">Powered by Gemini Flash</div>
+        <div className="text-gray-500 text-xs">AI Engine: Groq · Llama 3.3</div>
       </div>
     </div>
   );

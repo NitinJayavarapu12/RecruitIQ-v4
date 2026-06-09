@@ -189,16 +189,16 @@ export default function ResultsStep({ results, jobId, jdData, skillsData, onNewS
         {/* Stats + actions */}
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex gap-4">
+            <div className="flex gap-5">
               {[
-                { label: "Screened", value: stats.total, color: "text-gray-900" },
-                { label: "Excellent", value: stats.excellent, color: "text-emerald-600" },
-                { label: "Strong", value: stats.strong, color: "text-green-600" },
-                { label: "Avg Score", value: `${stats.avgScore}/100`, color: "text-indigo-600" },
-              ].map(({ label, value, color }) => (
-                <div key={label} className="text-center">
-                  <div className={`text-xl font-bold ${color}`}>{value}</div>
-                  <div className="text-xs text-gray-400">{label}</div>
+                { label: "Screened", value: stats.total, border: "border-indigo-400", text: "text-indigo-600" },
+                { label: "Excellent", value: stats.excellent, border: "border-emerald-400", text: "text-emerald-600" },
+                { label: "Strong", value: stats.strong, border: "border-green-400", text: "text-green-600" },
+                { label: "Avg Score", value: `${stats.avgScore}/100`, border: "border-blue-400", text: "text-blue-600" },
+              ].map(({ label, value, border, text }) => (
+                <div key={label} className={`pl-3 border-l-2 ${border}`}>
+                  <div className={`text-2xl font-bold leading-tight ${text}`}>{value}</div>
+                  <div className="text-xs text-gray-400 font-medium mt-0.5">{label}</div>
                 </div>
               ))}
             </div>
