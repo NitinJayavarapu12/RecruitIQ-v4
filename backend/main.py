@@ -18,7 +18,7 @@ from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
-from services.bge_ranker import bi_encode_rank, _get_model as _get_bge_model
+from services.bge_ranker import bi_encode_rank
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
@@ -26,18 +26,6 @@ from services.excel_exporter import export_to_excel
 app = FastAPI(title="RecruitIQ API", version="4.0.0")
 
 
-@app.on_event("startup")
-async def warmup_models():
-    """Schedule BGE model loading in background — server binds port immediately."""
-    asyncio.create_task(_run_warmup())
-
-async def _run_warmup():
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(None, _get_bge_model)
-        print("[STARTUP] BGE model warmed up.")
-    except Exception as e:
-        print(f"[STARTUP] BGE warmup error (non-fatal): {e}")
 
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
