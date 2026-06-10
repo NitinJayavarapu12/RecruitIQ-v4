@@ -5,7 +5,7 @@ import re
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -13,6 +13,7 @@ load_dotenv(override=True)
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from pydantic import BaseModel
 
 from services.jd_parser import parse_jd_from_bytes
 from services.jd_analyzer import analyze_jd
@@ -54,6 +55,7 @@ def init_job() -> Dict:
         "zip_path": None,
         "filtered_folder": None,
         "error": None,
+        "skipped": 0,
     }
 
 
@@ -184,6 +186,48 @@ async def screen_resumes(
         filter_mode=filter_mode,
     )
 
+    return {"job_id": job_id}
+
+
+# ── Candidate screening (DB-backed candidates, text already extracted) ─────────
+
+class CandidateInput(BaseModel):
+    candidate_id: int
+    name: str
+    resume_text: str
+
+
+class ScreenCandidatesRequest(BaseModel):
+    jd_text: str
+    top_n: int = 20
+    candidates: List[CandidateInput]
+    primary_skills: Optional[List[str]] = None
+    secondary_skills: Optional[List[str]] = None
+    filter_skills: Optional[List[str]] = None
+    filter_mode: str = "OR"
+
+
+@app.post("/api/screen-candidates")
+async def screen_candidates_endpoint(req: ScreenCandidatesRequest, background_tasks: BackgroundTasks):
+    if not req.jd_text.strip():
+        raise HTTPException(status_code=400, detail="JD text is required.")
+    if not req.candidates:
+        raise HTTPException(status_code=400, detail="No candidates provided.")
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = init_job()
+
+    background_tasks.add_task(
+        run_candidate_screening,
+        job_id=job_id,
+        jd_text=req.jd_text,
+        candidates=[c.dict() for c in req.candidates],
+        top_n=req.top_n,
+        approved_primary=req.primary_skills,
+        approved_secondary=req.secondary_skills,
+        filter_skills=req.filter_skills,
+        filter_mode=req.filter_mode,
+    )
     return {"job_id": job_id}
 
 
@@ -416,6 +460,110 @@ async def run_screening(
 
         job["results"] = results
         job["excel_path"] = excel_path
+        job["status"] = "complete"
+        job["phase"] = f"Done! Top {len(results)} candidates found."
+
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["phase"] = "Error occurred."
+        import traceback
+        traceback.print_exc()
+
+
+async def run_candidate_screening(
+    job_id: str,
+    jd_text: str,
+    candidates: List[dict],
+    top_n: int,
+    approved_primary: Optional[List[str]] = None,
+    approved_secondary: Optional[List[str]] = None,
+    filter_skills: Optional[List[str]] = None,
+    filter_mode: str = "OR",
+):
+    try:
+        job = jobs[job_id]
+        job["status"] = "running"
+
+        job["phase"] = "Analyzing job description..."
+        jd_requirements = analyze_jd(jd_text)
+        if approved_primary:
+            jd_requirements["primary_skills"] = approved_primary
+            jd_requirements["secondary_skills"] = approved_secondary or []
+        jd_requirements["skill_match_mode"] = "OR"
+
+        job["phase"] = "Preparing candidate pool..."
+        parsed = [
+            {
+                "filename": f"candidate_{c['candidate_id']}",
+                "path": "",
+                "text": c["resume_text"],
+                "candidate_id": c["candidate_id"],
+            }
+            for c in candidates if c.get("resume_text") and c["resume_text"].strip()
+        ]
+        job["skipped"] = len(candidates) - len(parsed)
+        job["total"] = len(parsed)
+
+        if not parsed:
+            job["status"] = "complete"
+            job["phase"] = "Done — no candidates with resume text available."
+            job["results"] = []
+            return
+
+        loop = asyncio.get_running_loop()
+
+        # Phase 1.5 — keyword pre-filter / ranking (rapidfuzz)
+        bi_top_k = min(150, len(parsed))
+        job["phase"] = f"Ranking {len(parsed)} candidates..."
+        bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
+        top_resumes = bi_ranked[:max(top_n * 3, 30)]
+        job["progress"] = job["total"]
+
+        if not top_resumes:
+            job["status"] = "complete"
+            job["phase"] = "Done — no matching candidates found."
+            job["results"] = []
+            return
+
+        # Phase 2 — AI scoring
+        phase2_total = len(top_resumes)
+        job["phase"] = f"AI scoring top {phase2_total} candidates..."
+        job["progress"] = 0
+        job["total"] = phase2_total
+
+        def on_progress(done, total_, filename):
+            job["progress"] = done
+            job["current_file"] = filename
+            job["phase"] = f"AI scoring ({done}/{total_})"
+
+        results = await gemini_rerank(
+            jd_text, top_resumes, top_n=top_n,
+            jd_requirements=jd_requirements, on_progress=on_progress,
+        )
+
+        valid = [r for r in results if r.get("name", "N/A").upper() != "N/A"]
+        if valid:
+            results = valid
+
+        # Skill filter — AND: must have all selected, OR: must have at least one
+        if filter_skills:
+            filt_lower = {s.lower() for s in filter_skills}
+            matched_lower = lambda r: {s.lower() for s in r.get("matched_skills", [])}
+            if filter_mode == "AND":
+                skill_filtered = [r for r in results if filt_lower <= matched_lower(r)]
+            else:
+                skill_filtered = [r for r in results if filt_lower & matched_lower(r)]
+            if skill_filtered:
+                results = skill_filtered
+
+        job["phase"] = "Generating Excel report..."
+        try:
+            job["excel_path"] = export_to_excel(results, "candidate_screening")
+        except Exception:
+            job["excel_path"] = None
+
+        job["results"] = results
         job["status"] = "complete"
         job["phase"] = f"Done! Top {len(results)} candidates found."
 

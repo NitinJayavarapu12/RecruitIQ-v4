@@ -194,46 +194,22 @@ export default function SkillsReviewStep({ jdData, onBack, onNext }) {
             : "OR — candidates must have at least one selected skill to appear in results"}
         </div>
 
-        {/* All skills selectable */}
-        {primarySkills.length > 0 && (
-          <div className="mb-3">
-            <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Primary</div>
-            <div className="flex flex-wrap gap-2">
-              {primarySkills.map(skill => (
-                <button
-                  key={skill}
-                  onClick={() => toggleFilterSkill(skill)}
-                  className={`px-3 py-1 text-xs font-medium rounded-full border transition-all ${
-                    selectedFilterSkills.has(skill)
-                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                      : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
-                  }`}
-                >
-                  {skill}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {secondarySkills.length > 0 && (
-          <div>
-            <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Secondary</div>
-            <div className="flex flex-wrap gap-2">
-              {secondarySkills.map(skill => (
-                <button
-                  key={skill}
-                  onClick={() => toggleFilterSkill(skill)}
-                  className={`px-3 py-1 text-xs font-medium rounded-full border transition-all ${
-                    selectedFilterSkills.has(skill)
-                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                      : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
-                  }`}
-                >
-                  {skill}
-                </button>
-              ))}
-            </div>
+        {/* All skills in one flat list */}
+        {(primarySkills.length > 0 || secondarySkills.length > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {[...primarySkills, ...secondarySkills].map(skill => (
+              <button
+                key={skill}
+                onClick={() => toggleFilterSkill(skill)}
+                className={`px-3 py-1 text-xs font-medium rounded-full border transition-all ${
+                  selectedFilterSkills.has(skill)
+                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
+                }`}
+              >
+                {skill}
+              </button>
+            ))}
           </div>
         )}
 

@@ -134,16 +134,6 @@ def extract_and_score(text: str, jd_requirements: dict) -> dict:
     primary_str = ", ".join(jd_requirements.get("primary_skills", []))
     secondary_str = ", ".join(jd_requirements.get("secondary_skills", []))
 
-    prompt = SCORING_PROMPT.format(
-        required_title=jd_requirements.get("required_title", "N/A"),
-        required_years=jd_requirements.get("required_years", "0"),
-        required_education=jd_requirements.get("required_education", "N/A"),
-        required_domain=jd_requirements.get("required_domain", "N/A"),
-        primary_skills=primary_str or "N/A",
-        secondary_skills=secondary_str or "N/A",
-        resume_text=text,
-    )
-
     defaults = {
         "name": "N/A", "email": "N/A", "phone": "N/A", "linkedin": "N/A",
         "years_of_experience": "0", "current_company": "N/A",
@@ -159,14 +149,31 @@ def extract_and_score(text: str, jd_requirements: dict) -> dict:
     }
 
     try:
+        if not text or not text.strip():
+            print("  [GROQ] Empty resume text — skipping Groq call")
+            return defaults
+
+        # Escape braces in resume text so str.format() doesn't misinterpret them
+        safe_text = text.replace("{", "{{").replace("}", "}}")
+        prompt = SCORING_PROMPT.format(
+            required_title=jd_requirements.get("required_title", "N/A"),
+            required_years=jd_requirements.get("required_years", "0"),
+            required_education=jd_requirements.get("required_education", "N/A"),
+            required_domain=jd_requirements.get("required_domain", "N/A"),
+            primary_skills=primary_str or "N/A",
+            secondary_skills=secondary_str or "N/A",
+            resume_text=safe_text,
+        )
+        print(f"  [GROQ] Sending prompt — resume_text length: {len(text)} chars")
+
         last_err = None
         for attempt in range(4):
             try:
                 response = _client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0,
-                    max_tokens=1200,
+                    max_tokens=600,
                     response_format={"type": "json_object"},
                 )
                 break
@@ -248,15 +255,15 @@ def compute_final_score(fields: dict) -> float:
 
 def get_tier(final_score: float) -> str:
     if final_score >= 90:
-        return "🌟 Excellent Match"
+        return "Excellent Match"
     elif final_score >= 75:
-        return "✅ Strong Match"
+        return "Strong Match"
     elif final_score >= 60:
-        return "⚠️ Good Match"
+        return "Good Match"
     elif final_score >= 45:
-        return "🔶 Partial Match"
+        return "Partial Match"
     else:
-        return "❌ Weak Match"
+        return "Weak Match"
 
 
 def get_experience_flag(years_str: str, required_years_str: str) -> str:
@@ -276,54 +283,91 @@ def get_experience_flag(years_str: str, required_years_str: str) -> str:
 def process_single_resume(resume: Dict, jd_text: str, jd_requirements: dict) -> Dict:
     filename = resume.get("filename", "")
     file_path = resume.get("path", "")
-    fallback_text = resume.get("text", "")
+    phase1_text = resume.get("text", "")
     keyword_score = resume.get("keyword_score", 0)
 
-    parsed_text = parse_resume_text(file_path)
-    text = parsed_text if parsed_text else fallback_text
-
-    fields = extract_and_score(text, jd_requirements)
-    final_score = round(compute_final_score(fields), 1)
-    tier = get_tier(final_score)
-    experience_flag = get_experience_flag(
-        fields["years_of_experience"],
-        jd_requirements.get("required_years", "0")
-    )
-
-    print(f"  [GROQ] {fields['name']} | score={final_score} | tier={tier}")
-
-    return {
-        "filename":                filename,
-        "name":                    fields["name"],
-        "phone":                   fields["phone"],
-        "email":                   fields["email"],
-        "linkedin":                fields["linkedin"],
-        "years_of_experience":     fields["years_of_experience"],
-        "experience_flag":         experience_flag,
-        "current_company":         fields["current_company"],
-        "latest_employment":       fields["current_company"],
-        "education":               fields["education"],
-        "education_meets_jd":      fields["education_meets_jd"],
-        "matched_skills":          fields["matched_skills"],
-        "missing_skills":          fields["missing_skills"],
-        "candidate_summary":       fields["candidate_summary"],
-        "technical_skills_score":  fields["technical_skills_score"],
-        "technical_skills_reason": fields["technical_skills_reason"],
-        "experience_score":        fields["experience_score"],
-        "experience_reason":       fields["experience_reason"],
-        "domain_score":            fields["domain_score"],
-        "domain_reason":           fields["domain_reason"],
-        "role_score":              fields["role_score"],
-        "role_reason":             fields["role_reason"],
-        "education_score":         fields["education_score"],
-        "education_reason":        fields["education_reason"],
-        "career_score":            fields["career_score"],
-        "career_reason":           fields["career_reason"],
-        "final_score":             final_score,
-        "score":                   final_score,
-        "tier":                    tier,
-        "keyword_score":           keyword_score,
+    defaults_na = {
+        "name": "N/A", "email": "N/A", "phone": "N/A", "linkedin": "N/A",
+        "years_of_experience": "0", "current_company": "N/A",
+        "education": "N/A", "education_meets_jd": False,
+        "matched_skills": [], "missing_skills": [],
+        "candidate_summary": "N/A",
+        "technical_skills_score": 0, "technical_skills_reason": "N/A",
+        "experience_score": 0, "experience_reason": "N/A",
+        "domain_score": 0, "domain_reason": "N/A",
+        "role_score": 0, "role_reason": "N/A",
+        "education_score": 0, "education_reason": "N/A",
+        "career_score": 0, "career_reason": "N/A",
     }
+
+    try:
+        # Use Phase 1 text directly; only re-parse if Phase 1 gave nothing
+        if phase1_text and phase1_text.strip():
+            text = phase1_text
+            print(f"  [PHASE2] {filename} — Phase1 text ({len(text)} chars)")
+        else:
+            parsed_text = parse_resume_text(file_path)
+            text = parsed_text or ""
+            print(f"  [PHASE2] {filename} — re-parsed ({len(text)} chars)")
+
+        fields = extract_and_score(text, jd_requirements)
+        final_score = round(compute_final_score(fields), 1)
+        tier = get_tier(final_score)
+        experience_flag = get_experience_flag(
+            fields["years_of_experience"],
+            jd_requirements.get("required_years", "0")
+        )
+
+        print(f"  [GROQ] {fields['name']} | score={final_score} | tier={tier}")
+
+        return {
+            "filename":                filename,
+            "candidate_id":            resume.get("candidate_id"),
+            "name":                    fields["name"],
+            "phone":                   fields["phone"],
+            "email":                   fields["email"],
+            "linkedin":                fields["linkedin"],
+            "years_of_experience":     fields["years_of_experience"],
+            "experience_flag":         experience_flag,
+            "current_company":         fields["current_company"],
+            "latest_employment":       fields["current_company"],
+            "education":               fields["education"],
+            "education_meets_jd":      fields["education_meets_jd"],
+            "matched_skills":          fields["matched_skills"],
+            "missing_skills":          fields["missing_skills"],
+            "candidate_summary":       fields["candidate_summary"],
+            "technical_skills_score":  fields["technical_skills_score"],
+            "technical_skills_reason": fields["technical_skills_reason"],
+            "experience_score":        fields["experience_score"],
+            "experience_reason":       fields["experience_reason"],
+            "domain_score":            fields["domain_score"],
+            "domain_reason":           fields["domain_reason"],
+            "role_score":              fields["role_score"],
+            "role_reason":             fields["role_reason"],
+            "education_score":         fields["education_score"],
+            "education_reason":        fields["education_reason"],
+            "career_score":            fields["career_score"],
+            "career_reason":           fields["career_reason"],
+            "final_score":             final_score,
+            "score":                   final_score,
+            "tier":                    tier,
+            "keyword_score":           keyword_score,
+        }
+
+    except Exception as e:
+        print(f"  [PHASE2] UNHANDLED ERROR for {filename}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            **defaults_na,
+            "filename": filename,
+            "candidate_id": resume.get("candidate_id"),
+            "keyword_score": keyword_score,
+            "final_score": 0,
+            "score": 0,
+            "tier": get_tier(0),
+            "experience_flag": "❌",
+        }
 
 
 def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
@@ -347,7 +391,7 @@ def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
     return unique[:top_n]
 
 
-CONCURRENCY_LIMIT = 2
+CONCURRENCY_LIMIT = 4
 
 
 async def gemini_rerank(

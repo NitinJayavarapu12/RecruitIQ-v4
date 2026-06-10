@@ -67,7 +67,7 @@ def analyze_jd(jd_text: str, feedback: str = "") -> Dict:
         for attempt in range(4):
             try:
                 response = _client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0,
                     max_tokens=800,

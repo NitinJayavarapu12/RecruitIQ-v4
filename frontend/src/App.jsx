@@ -59,11 +59,12 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 overflow-hidden">
       <Sidebar onNewScreening={handleNewScreening} currentStep={step} />
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="bg-white border-b border-gray-200 px-8 py-4">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Top bar with step indicator */}
+        <div className="bg-white border-b border-slate-200 px-8 py-3.5 flex-shrink-0">
           <StepIndicator
             currentStep={step}
             onStepClick={handleStepClick}
@@ -72,34 +73,43 @@ export default function App() {
           />
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        {/* Step content — each step manages its own scroll */}
+        <div className="flex-1 overflow-hidden flex flex-col">
           {step === 1 && (
-            <JDInputStep onNext={handleJDAnalyzed} />
+            <div className="flex-1 overflow-y-auto">
+              <JDInputStep onNext={handleJDAnalyzed} />
+            </div>
           )}
           {step === 2 && jdData && (
-            <SkillsReviewStep
-              jdData={jdData}
-              onBack={() => setStep(1)}
-              onNext={handleSkillsApproved}
-            />
+            <div className="flex-1 overflow-y-auto">
+              <SkillsReviewStep
+                jdData={jdData}
+                onBack={() => setStep(1)}
+                onNext={handleSkillsApproved}
+              />
+            </div>
           )}
           {step === 3 && (
-            <ScreeningStep
-              jdData={jdData}
-              skillsData={skillsData}
-              resumeFiles={resumeFiles}
-              topN={topN}
-              onDone={handleScreeningDone}
-            />
+            <div className="flex-1 overflow-hidden">
+              <ScreeningStep
+                jdData={jdData}
+                skillsData={skillsData}
+                resumeFiles={resumeFiles}
+                topN={topN}
+                onDone={handleScreeningDone}
+              />
+            </div>
           )}
           {step === 4 && results && (
-            <ResultsStep
-              results={results}
-              jobId={jobId}
-              jdData={jdData}
-              skillsData={skillsData}
-              onNewScreening={handleNewScreening}
-            />
+            <div className="flex-1 overflow-hidden flex">
+              <ResultsStep
+                results={results}
+                jobId={jobId}
+                jdData={jdData}
+                skillsData={skillsData}
+                onNewScreening={handleNewScreening}
+              />
+            </div>
           )}
         </div>
       </div>
