@@ -11,6 +11,8 @@ load_dotenv(override=True)
 
 from groq import Groq
 
+from services.experience_filter import parse_years
+
 _client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # ── In-memory parse cache (persists for server lifetime) ──────────────────────
@@ -267,11 +269,11 @@ def get_tier(final_score: float) -> str:
 
 
 def get_experience_flag(years_str: str, required_years_str: str) -> str:
-    try:
-        years = int(float(years_str or "0"))
-        required = int(float(required_years_str or "0"))
-    except (ValueError, TypeError):
+    years = parse_years(years_str)
+    required = parse_years(required_years_str)
+    if years is None or required is None:
         return "⚠️"
+    years, required = int(years), int(required)
     if years >= required:
         return "✅"
     elif years >= required - 1:
@@ -370,7 +372,7 @@ def process_single_resume(resume: Dict, jd_text: str, jd_requirements: dict) -> 
         }
 
 
-def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
+def deduplicate_results(results: List[Dict]) -> List[Dict]:
     results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
     seen_emails, seen_names, unique = set(), set(), []
     for result in results:
@@ -388,7 +390,7 @@ def deduplicate_results(results: List[Dict], top_n: int = 50) -> List[Dict]:
             seen_names.add(name_key)
         unique.append(result)
     print(f"[DEDUP] {len(results)} → {len(unique)} unique candidates")
-    return unique[:top_n]
+    return unique
 
 
 CONCURRENCY_LIMIT = 4
@@ -397,7 +399,6 @@ CONCURRENCY_LIMIT = 4
 async def gemini_rerank(
     jd_text: str,
     resumes: List[Dict],
-    top_n: int = 50,
     jd_requirements: dict = None,
     on_progress=None,
 ) -> List[Dict]:
@@ -424,4 +425,4 @@ async def gemini_rerank(
 
     tasks = [process_with_semaphore(r) for r in resumes]
     all_results = await asyncio.gather(*tasks)
-    return deduplicate_results(list(all_results), top_n=top_n)
+    return deduplicate_results(list(all_results))

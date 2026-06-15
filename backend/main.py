@@ -20,6 +20,7 @@ from services.jd_analyzer import analyze_jd
 from services.jd_scraper import scrape_job_url
 from services.resume_parser import get_pdf_files, parse_single_resume
 from services.bge_ranker import bi_encode_rank
+from services.experience_filter import filter_by_experience_tier
 from services.gemini_reranker import gemini_rerank
 from services.file_manager import create_filtered_zip
 from services.excel_exporter import export_to_excel
@@ -124,7 +125,6 @@ async def screen_resumes(
     primary_skills: str = Form(default="[]"),
     secondary_skills: str = Form(default="[]"),
     jd_text_override: str = Form(default=""),
-    skill_match_mode: str = Form(default="OR"),
     filter_skills: str = Form(default="[]"),
     filter_mode: str = Form(default="OR"),
 ):
@@ -181,7 +181,6 @@ async def screen_resumes(
         top_n=int(top_n),
         approved_primary=approved_primary,
         approved_secondary=approved_secondary,
-        skill_match_mode=skill_match_mode,
         filter_skills=filter_skills_list,
         filter_mode=filter_mode,
     )
@@ -328,7 +327,6 @@ async def run_screening(
     top_n: int,
     approved_primary: List[str] = None,
     approved_secondary: List[str] = None,
-    skill_match_mode: str = "OR",
     filter_skills: List[str] = None,
     filter_mode: str = "OR",
 ):
@@ -341,11 +339,9 @@ async def run_screening(
         if approved_primary:
             jd_requirements["primary_skills"] = approved_primary
             jd_requirements["secondary_skills"] = approved_secondary or []
-        jd_requirements["skill_match_mode"] = skill_match_mode
 
         print(f"[JD] Role: {jd_requirements.get('required_title')} | "
-              f"Skills: {jd_requirements.get('primary_skills')} | "
-              f"Mode: {skill_match_mode}")
+              f"Skills: {jd_requirements.get('primary_skills')}")
 
         job["phase"] = "Scanning resumes..."
         pdf_files = get_pdf_files(resume_folder)
@@ -397,9 +393,9 @@ async def run_screening(
 
         loop = asyncio.get_running_loop()
 
-        # Phase 1.5 — BGE bi-encoder semantic ranking
+        # Phase 1.5 — keyword-match ranking against JD keywords
         bi_top_k = min(150, len(parsed))
-        job["phase"] = f"Phase 1.5: Semantic ranking {len(parsed)} resumes..."
+        job["phase"] = f"Phase 1.5: Ranking {len(parsed)} resumes by relevance..."
         job["progress"] = 0
         job["total"] = len(parsed)
         bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
@@ -423,12 +419,11 @@ async def run_screening(
         def on_phase3_progress(done: int, total: int, filename: str):
             job["progress"] = done
             job["current_file"] = filename
-            job["phase"] = f"Phase 2: AI scoring ({done}/{total})"
+            job["phase"] = "Phase 2: AI scoring resumes"
 
         results = await gemini_rerank(
             jd_text,
             top_resumes,
-            top_n=top_n,
             jd_requirements=jd_requirements,
             on_progress=on_phase3_progress,
         )
@@ -438,16 +433,18 @@ async def run_screening(
         if valid:
             results = valid
 
-        # Skill filter — AND: must have all selected, OR: must have at least one
+        # Skill filter — AND: must have all selected, OR: must have at least one.
+        # Applied to the full scored pool *before* the top_n cut, so matching
+        # resumes outside the naive top-N can still surface.
         if filter_skills:
             filt_lower = {s.lower() for s in filter_skills}
             matched_lower = lambda r: {s.lower() for s in r.get("matched_skills", [])}
             if filter_mode == "AND":
-                skill_filtered = [r for r in results if filt_lower <= matched_lower(r)]
+                results = [r for r in results if filt_lower <= matched_lower(r)]
             else:
-                skill_filtered = [r for r in results if filt_lower & matched_lower(r)]
-            if skill_filtered:
-                results = skill_filtered
+                results = [r for r in results if filt_lower & matched_lower(r)]
+
+        results = results[:top_n]
 
         job["phase"] = "Creating resume ZIP..."
         zip_path = create_filtered_zip(
@@ -485,14 +482,13 @@ async def run_candidate_screening(
         job = jobs[job_id]
         job["status"] = "running"
 
-        job["phase"] = "Analyzing job description..."
+        job["phase"] = "Phase 1/3: Analyzing job description..."
         jd_requirements = analyze_jd(jd_text)
         if approved_primary:
             jd_requirements["primary_skills"] = approved_primary
             jd_requirements["secondary_skills"] = approved_secondary or []
-        jd_requirements["skill_match_mode"] = "OR"
 
-        job["phase"] = "Preparing candidate pool..."
+        job["phase"] = "Phase 1/3: Preparing candidate pool..."
         parsed = [
             {
                 "filename": f"candidate_{c['candidate_id']}",
@@ -511,11 +507,19 @@ async def run_candidate_screening(
             job["results"] = []
             return
 
+        # Phase 1.5 — filter candidate pool by experience tier vs JD requirement
+        job["phase"] = "Phase 1/3: Filtering candidates by experience level..."
+        parsed, required_tier, _ = filter_by_experience_tier(
+            parsed, jd_requirements.get("required_years", "0"),
+            min_pool_size=max(top_n * 3, 30),
+        )
+        job["total"] = len(parsed)
+
         loop = asyncio.get_running_loop()
 
-        # Phase 1.5 — keyword pre-filter / ranking (rapidfuzz)
+        # Phase 2 — keyword-match ranking against JD keywords
         bi_top_k = min(150, len(parsed))
-        job["phase"] = f"Ranking {len(parsed)} candidates..."
+        job["phase"] = f"Phase 2/3: Ranking {len(parsed)} candidates by relevance..."
         bi_ranked = await loop.run_in_executor(None, bi_encode_rank, jd_text, parsed, bi_top_k)
         top_resumes = bi_ranked[:max(top_n * 3, 30)]
         job["progress"] = job["total"]
@@ -526,19 +530,19 @@ async def run_candidate_screening(
             job["results"] = []
             return
 
-        # Phase 2 — AI scoring
+        # Phase 3 — AI scoring
         phase2_total = len(top_resumes)
-        job["phase"] = f"AI scoring top {phase2_total} candidates..."
+        job["phase"] = f"Phase 3/3: AI scoring top {phase2_total} candidates..."
         job["progress"] = 0
         job["total"] = phase2_total
 
         def on_progress(done, total_, filename):
             job["progress"] = done
             job["current_file"] = filename
-            job["phase"] = f"AI scoring ({done}/{total_})"
+            job["phase"] = "Phase 3/3: AI scoring candidates"
 
         results = await gemini_rerank(
-            jd_text, top_resumes, top_n=top_n,
+            jd_text, top_resumes,
             jd_requirements=jd_requirements, on_progress=on_progress,
         )
 
@@ -546,16 +550,18 @@ async def run_candidate_screening(
         if valid:
             results = valid
 
-        # Skill filter — AND: must have all selected, OR: must have at least one
+        # Skill filter — AND: must have all selected, OR: must have at least one.
+        # Applied to the full scored pool *before* the top_n cut, so matching
+        # candidates outside the naive top-N can still surface.
         if filter_skills:
             filt_lower = {s.lower() for s in filter_skills}
             matched_lower = lambda r: {s.lower() for s in r.get("matched_skills", [])}
             if filter_mode == "AND":
-                skill_filtered = [r for r in results if filt_lower <= matched_lower(r)]
+                results = [r for r in results if filt_lower <= matched_lower(r)]
             else:
-                skill_filtered = [r for r in results if filt_lower & matched_lower(r)]
-            if skill_filtered:
-                results = skill_filtered
+                results = [r for r in results if filt_lower & matched_lower(r)]
+
+        results = results[:top_n]
 
         job["phase"] = "Generating Excel report..."
         try:
